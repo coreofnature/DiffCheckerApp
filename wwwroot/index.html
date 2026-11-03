@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="tr" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>.NET 10 Pro Diff Engine</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* Satır renkleri */
+    .line-added { background-color: rgba(34, 197, 94, 0.12); color: #86efac; }
+    .line-deleted { background-color: rgba(239, 68, 68, 0.12); color: #fca5a5; }
+    .line-unchanged { color: #94a3b8; }
+    .line-empty { background-color: rgba(30, 41, 59, 0.3); }
+
+    /* Karakter seviyesi vurgular */
+    .char-del { background-color: rgba(220, 38, 38, 0.6); color: #ffffff; font-weight: bold; border-radius: 2px; }
+    .char-add { background-color: rgba(22, 163, 74, 0.6); color: #ffffff; font-weight: bold; border-radius: 2px; }
+
+    /* Senkron kaydırma alanı */
+    .sync-scroll {
+      scrollbar-width: thin;
+      scrollbar-color: #334155 #0f172a;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans">
+  
+  <!-- Üst Bar -->
+  <header class="sticky top-0 z-50 bg-slate-900/90 backdrop-blur border-b border-slate-800 px-6 py-3 flex items-center justify-between shadow-lg">
+    <div class="flex items-center gap-3">
+      <span class="text-lg font-bold tracking-tight text-white flex items-center gap-2">
+        <span class="text-indigo-400">⚡</span> Diff Studio Pro
+      </span>
+      <span class="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded font-mono border border-slate-700">.NET 10 + LCS</span>
+    </div>
+
+    <div class="flex items-center gap-4">
+      <span id="diffSummary" class="text-xs font-mono text-slate-400">Karşılaştırma bekleniyor</span>
+      <button onclick="compareDiff()" class="bg-indigo-600 hover:bg-indigo-500 font-medium px-5 py-2 rounded-lg transition shadow-lg shadow-indigo-900/30 text-xs">
+        Karşılaştır
+      </button>
+    </div>
+  </header>
+
+  <!-- BÖLÜM 1: 50/50 Girdi & Senkron Split Görünüm (100vh) -->
+  <section class="h-[calc(100vh-60px)] p-4 flex flex-col gap-3">
+    
+    <!-- Giriş Textareaları (Küçülebilir/Katlanabilir) -->
+    <div id="inputSection" class="grid grid-cols-2 gap-4 h-44 shrink-0 transition-all">
+      <div class="flex flex-col">
+        <span class="text-xs font-semibold text-slate-400 mb-1">Orijinal (Eski) Metin</span>
+        <textarea id="leftText" class="w-full flex-1 bg-slate-900 border border-slate-800 rounded-xl p-3 font-mono text-xs focus:outline-none focus:border-indigo-500 resize-none sync-scroll" placeholder="Eski metni yapıştırın..."></textarea>
+      </div>
+      <div class="flex flex-col">
+        <span class="text-xs font-semibold text-slate-400 mb-1">Değiştirilmiş (Yeni) Metin</span>
+        <textarea id="rightText" class="w-full flex-1 bg-slate-900 border border-slate-800 rounded-xl p-3 font-mono text-xs focus:outline-none focus:border-indigo-500 resize-none sync-scroll" placeholder="Yeni metni yapıştırın..."></textarea>
+      </div>
+    </div>
+
+    <!-- 50/50 Senkronize Split Diff Panel -->
+    <div class="flex-1 bg-slate-900/70 border border-slate-800 rounded-2xl overflow-hidden flex flex-col shadow-2xl">
+      <div class="bg-slate-800/80 px-4 py-2 border-b border-slate-800 grid grid-cols-2 text-xs font-semibold text-slate-400 font-mono">
+        <div class="flex items-center gap-2"><span>Eski Hal (Side-by-Side)</span></div>
+        <div class="flex items-center gap-2 pl-4 border-l border-slate-700"><span>Yeni Hal (Side-by-Side)</span></div>
+      </div>
+
+      <!-- İki panelli, kilitli scroll alanı -->
+      <div class="flex-1 grid grid-cols-2 overflow-hidden relative font-mono text-xs">
+        
+        <!-- Sol Panel -->
+        <!-- Sol Panel Kapsayıcısı (Relative Wrapper) -->
+        <div class="relative h-full overflow-hidden border-r border-slate-800/80">
+  
+            <!-- Saydam Dinamik Navigasyon Kılavuzu (Floating HUD) -->
+            <div id="leftNavHud" class="absolute top-2 right-3 z-20 pointer-events-none opacity-0 transition-all duration-200 bg-slate-900/80 backdrop-blur-md border border-slate-700/60 rounded-md px-2.5 py-1 flex items-center gap-2 shadow-lg shadow-black/40 text-[11px] font-mono">
+                <span class="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse"></span>
+                <span id="leftNavLines" class="text-slate-300">Satır: -</span>
+                <span class="text-slate-600">|</span>
+                <span id="leftNavPercent" class="text-indigo-400 font-semibold">%0</span>
+            </div>
+
+            <!-- Sol Panel Scroll Alanı -->
+            <div id="splitLeft" class="overflow-y-auto overflow-x-hidden sync-scroll h-full select-text">
+                <div class="p-8 text-center text-slate-600">Henüz karşılaştırma yapılmadı.</div>
+            </div>
+
+        </div>
+
+        <!-- Sağ Panel -->
+        <div id="splitRight" class="overflow-y-auto overflow-x-hidden sync-scroll h-full select-text">
+          <div class="p-8 text-center text-slate-600">Henüz karşılaştırma yapılmadı.</div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="text-center">
+      <span class="text-[11px] text-slate-500 font-mono animate-bounce inline-block">↓ Aşağı kaydırarak tam ekran birleşik diff raporuna geçebilirsiniz ↓</span>
+    </div>
+  </section>
+
+  <!-- BÖLÜM 2: Tarayıcı Aşağı Kaydırıldığında Açılan Tam Ekran Unified Diff (100vh) -->
+  <section class="min-h-screen p-4 flex flex-col">
+    <div class="flex-1 bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden flex flex-col relative shadow-2xl">
+      
+      <div class="bg-slate-800/80 px-6 py-3 border-b border-slate-800 flex justify-between items-center">
+        <span class="text-sm font-bold text-slate-300 font-mono">Fark Tablosu (Unified Output)</span>
+        <span class="text-xs text-slate-500 font-mono">Tüm satır dökümü ve karakter ayrıntıları</span>
+      </div>
+
+      <div class="flex-1 flex overflow-hidden relative">
+        <!-- Diff Satırları -->
+        <div id="unifiedContainer" class="flex-1 overflow-auto sync-scroll font-mono text-xs divide-y divide-slate-800/30 p-2">
+          <div class="p-12 text-center text-slate-600">Veri bekleniyor...</div>
+        </div>
+
+        <!-- Minimap / Sağdaki Rehber Gösterge Barı -->
+        <div class="w-4 bg-slate-950/80 border-l border-slate-800 relative flex flex-col" id="miniMap" title="Diff Haritası">
+          <!-- JS ile doldurulacak -->
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <script>
+    let isSyncingLeft = false;
+    let isSyncingRight = false;
+
+    const splitLeft = document.getElementById('splitLeft');
+    const splitRight = document.getElementById('splitRight');
+
+    // Senkron kaydırma (Scroll Locking)
+    splitLeft.addEventListener('scroll', () => {
+      if (!isSyncingLeft) {
+        isSyncingRight = true;
+        splitRight.scrollTop = splitLeft.scrollTop;
+      }
+      isSyncingLeft = false;
+      updateLeftNavGuide();
+    });
+
+    splitRight.addEventListener('scroll', () => {
+      if (!isSyncingRight) {
+        isSyncingLeft = true;
+        splitLeft.scrollTop = splitRight.scrollTop;
+      }
+      isSyncingRight = false;
+      updateLeftNavGuide();
+    });
+
+    async function compareDiff() {
+      const originalText = document.getElementById('leftText').value;
+      const modifiedText = document.getElementById('rightText').value;
+
+      // Eski metnin toplam satır sayısı
+    totalOldLines = originalText ? originalText.split(/\r\n|\r|\n/).length : 0;
+
+      const res = await fetch('/api/diff', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ originalText, modifiedText })
+      });
+
+      const lines = await res.json();
+      renderAll(lines);
+      updateLeftNavGuide();
+    }
+
+    function renderAll(lines) {
+      renderSplitView(lines);
+      renderUnifiedView(lines);
+      renderMinimap(lines);
+    }
+
+    // 1. Split Panel Çizimi (Side-by-Side + Karakter Vurgusu)
+    function renderSplitView(lines) {
+      splitLeft.innerHTML = '';
+      splitRight.innerHTML = '';
+
+      let i = 0;
+      while (i < lines.Count || i < lines.length) {
+        const line = lines[i];
+
+        // Durum A: Birbirinin ardı sıra gelen modified satırlar
+        if (line.type === 'deleted' && lines[i + 1] && lines[i + 1].type === 'added') {
+          const delLine = line;
+          const addLine = lines[i + 1];
+
+          splitLeft.appendChild(createSplitRow(delLine.oldLineNumber, renderChunks(delLine.chunks, 'char-del', delLine.text), 'line-deleted', '-'));
+          splitRight.appendChild(createSplitRow(addLine.newLineNumber, renderChunks(addLine.chunks, 'char-add', addLine.text), 'line-added', '+'));
+          i += 2;
+        } 
+        else if (line.type === 'deleted') {
+          splitLeft.appendChild(createSplitRow(line.oldLineNumber, escapeHtml(line.text), 'line-deleted', '-'));
+          splitRight.appendChild(createEmptyRow());
+          i++;
+        } 
+        else if (line.type === 'added') {
+          splitLeft.appendChild(createEmptyRow());
+          splitRight.appendChild(createSplitRow(line.newLineNumber, escapeHtml(line.text), 'line-added', '+'));
+          i++;
+        } 
+        else {
+          splitLeft.appendChild(createSplitRow(line.oldLineNumber, escapeHtml(line.text), 'line-unchanged', ' '));
+          splitRight.appendChild(createSplitRow(line.newLineNumber, escapeHtml(line.text), 'line-unchanged', ' '));
+          i++;
+        }
+      }
+    }
+
+    function createSplitRow(num, contentHtml, bgClass, sign) {
+      const div = document.createElement('div');
+      div.className = `flex items-center h-6 px-2 ${bgClass}`;
+      div.innerHTML = `
+        <span class="w-8 text-right pr-2 text-slate-600 select-none border-r border-slate-800/80">${num ?? ''}</span>
+        <span class="w-5 text-center font-bold select-none opacity-60">${sign}</span>
+        <span class="flex-1 whitespace-pre font-mono overflow-hidden text-ellipsis">${contentHtml}</span>
+      `;
+      return div;
+    }
+
+    function createEmptyRow() {
+      const div = document.createElement('div');
+      div.className = 'h-6 line-empty border-r border-slate-900/50';
+      div.innerHTML = '&nbsp;';
+      return div;
+    }
+
+    // 2. Birleşik Tablo Çizimi (Unified View)
+    function renderUnifiedView(lines) {
+      const container = document.getElementById('unifiedContainer');
+      container.innerHTML = '';
+
+      let added = 0, deleted = 0;
+
+      lines.forEach(line => {
+        if (line.type === 'added') added++;
+        if (line.type === 'deleted') deleted++;
+
+        const row = document.createElement('div');
+        row.className = `flex items-center px-4 py-1 ${'line-' + line.type}`;
+
+        const sign = line.type === 'added' ? '+' : line.type === 'deleted' ? '-' : ' ';
+        const oldNum = line.oldLineNumber ?? '';
+        const newNum = line.newLineNumber ?? '';
+
+        const lineContent = line.chunks 
+          ? renderChunks(line.chunks, line.type === 'deleted' ? 'char-del' : 'char-add', line.text)
+          : escapeHtml(line.text);
+
+        row.innerHTML = `
+          <div class="w-12 text-right pr-3 select-none text-slate-600 border-r border-slate-800/80">${oldNum}</div>
+          <div class="w-12 text-right pr-3 select-none text-slate-600 border-r border-slate-800/80">${newNum}</div>
+          <div class="w-6 text-center select-none font-bold">${sign}</div>
+          <div class="flex-1 whitespace-pre-wrap break-all">${lineContent}</div>
+        `;
+        container.appendChild(row);
+      });
+
+      document.getElementById('diffSummary').innerHTML = `<span class="text-emerald-400 font-bold">+${added}</span> / <span class="text-rose-400 font-bold">-${deleted}</span>`;
+    }
+
+    // 3. Minimap (Kuşbakışı Barı)
+    function renderMinimap(lines) {
+      const miniMap = document.getElementById('miniMap');
+      miniMap.innerHTML = '';
+
+      lines.forEach(line => {
+        const indicator = document.createElement('div');
+        indicator.className = 'w-full flex-1 min-h-[2px]';
+        if (line.type === 'added') indicator.classList.add('bg-emerald-500');
+        else if (line.type === 'deleted') indicator.classList.add('bg-rose-500');
+        else indicator.classList.add('bg-transparent');
+        miniMap.appendChild(indicator);
+      });
+    }
+
+    function renderChunks(chunks, highlightClass, fallbackText) {
+      if (!chunks || chunks.length === 0) return escapeHtml(fallbackText);
+      return chunks.map(c => {
+        const text = escapeHtml(c.text);
+        return c.isChanged ? `<span class="${highlightClass}">${text}</span>` : text;
+      }).join('');
+    }
+
+    function escapeHtml(text) {
+      if (!text) return '';
+      return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    window.addEventListener('pagehide', () => {
+      navigator.sendBeacon('/api/shutdown');
+    });
+
+    //HUD
+    let totalOldLines = 0;
+
+    // Scroll esnasında ekrandaki satırları anlık hesaplayan HUD fonksiyonu
+    function updateLeftNavGuide() {
+    const rows = splitLeft.children;
+    const hud = document.getElementById('leftNavHud');
+
+    if (!rows || rows.length === 0 || totalOldLines === 0) {
+        hud.classList.add('opacity-0');
+        return;
+    }
+
+    hud.classList.remove('opacity-0');
+
+    const scrollTop = splitLeft.scrollTop;
+    const clientHeight = splitLeft.clientHeight;
+    const scrollHeight = splitLeft.scrollHeight;
+
+    // Satır yüksekliği h-6 = 24px
+    const rowHeight = 24;
+    const startIndex = Math.max(0, Math.floor(scrollTop / rowHeight));
+    const visibleCount = Math.ceil(clientHeight / rowHeight);
+    const endIndex = Math.min(rows.length - 1, startIndex + visibleCount);
+
+    let startNum = null;
+    let endNum = null;
+
+    // Görünür aralıktaki ilk ve son satır numarasını tespit et
+    for (let i = startIndex; i <= endIndex; i++) {
+        const numSpan = rows[i].querySelector('.w-8');
+        if (numSpan && numSpan.innerText.trim() !== '') {
+        const num = parseInt(numSpan.innerText.trim(), 10);
+        if (!isNaN(num)) {
+            if (startNum === null) startNum = num;
+            endNum = num;
+        }
+        }
+    }
+
+    // Kaydırma yüzdesi
+    const maxScroll = scrollHeight - clientHeight;
+    const percent = maxScroll > 0 ? Math.min(100, Math.max(0, Math.round((scrollTop / maxScroll) * 100))) : 0;
+
+    const linesEl = document.getElementById('leftNavLines');
+    const percentEl = document.getElementById('leftNavPercent');
+
+    if (startNum !== null && endNum !== null) {
+        linesEl.innerHTML = `Satır: <strong class="text-white">${startNum}-${endNum}</strong> <span class="text-slate-500">/ ${totalOldLines}</span>`;
+    } else {
+        linesEl.innerHTML = `Satır: <strong class="text-white">-</strong> <span class="text-slate-500">/ ${totalOldLines}</span>`;
+    }
+
+    percentEl.innerText = `%${percent}`;
+    }
+  </script>
+</body>
+</html>
